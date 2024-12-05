@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phaser.js Example</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+
+<script>
+    // =============================================
+    //                    Preload
+    // =============================================
+    const config = {
+        type: Phaser.AUTO,
+        backgroundColor: '#030110',
+        width: window.innerWidth,
+        height: window.innerHeight,
+        scene: {
+            preload: preload,
+            create: create,
+            update: update
+        },
+        scale: {
+            mode: Phaser.Scale.RESIZE,
+            autoCenter: Phaser.Scale.CENTER_BOTH,
+            width: window.innerWidth,
+            height: window.innerHeight
+        },
+    };
+    const game = new Phaser.Game(config);
+
+    let player;
+    const playerSpeed = 10;
+    const playerRadius = 20;
+
+    let background;
+    const backgroundCellSize = 100;
+
+    function preload() {
+        
+    }
+
+    // =============================================
+    //                    Create
+    // =============================================
+    function create() {
+        this.scale.on('resize', (gameSize) => {
+            const width = gameSize.width;
+            const height = gameSize.height;
+            this.cameras.resize(width, height);
+        });
+
+        createBackground(this);
+        createPlayer(this);
+        createBullet(this);
+
+        cursors = this.input.keyboard.createCursorKeys();
+    }
+
+    function createBackground(game) {
+        background = game.add.graphics();
+        const color = 0x582bff;
+        const width = config.width + backgroundCellSize;
+        const height = config.height + backgroundCellSize;
+        for (let x = -width; x <= width; x += backgroundCellSize) {
+            background.lineStyle(1, color);
+            background.lineBetween(x, -height, x, height);
+            for(let i = 1; i < 5; i++) {
+                const d = i * (backgroundCellSize / 5);
+                background.lineStyle(1, color, 0.2);
+                background.lineBetween(x + d, -height, x + d, height);
+            }
+        }
+        for (let y = -height; y <= height; y += backgroundCellSize) {
+            background.lineStyle(1, color);
+            background.lineBetween(-width, y, width, y);
+            for(let i = 1; i < 5; i++) {
+                const d = i * (backgroundCellSize / 5);
+                background.lineStyle(1, color, 0.2);
+                background.lineBetween(-width, y + d, width, y + d);
+            }
+        }
+    }
+
+    function createPlayer(game) {
+        player = game.add.container(window.innerWidth / 2, window.innerHeight / 2);
+
+        game.textures.addCanvas('playerTexture', createDonutCanvas({r: playerRadius, rgb: [117, 249, 255]}));
+        const sprite = game.add.sprite(0, 0, 'playerTexture');
+        player.add(sprite);
+    }
+
+    function createBullet(game) {
+        bullet = game.add.container(300, 400);
+
+        game.textures.addCanvas('bulletTexture', createDonutCanvas({r: 20, rgb: [255, 86, 127]}));
+        const sprite = game.add.sprite(0, 0, 'bulletTexture');
+        bullet.add(sprite);
+    }
+    
+    // =============================================
+    //                    Canvas
+    // =============================================
+
+    function createDonutCanvas({r, rgb}) {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+
+        canvas.width = r * 4;
+        canvas.height = r * 4;
+
+        ctx.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 1)`;
+        ctx.beginPath();
+        ctx.arc(r * 2, r * 2, r, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 1)`;
+        ctx.beginPath();
+        ctx.arc(r * 2, r * 2, r * 0.7, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.fill();
+
+        const glow = ctx.createRadialGradient(r * 2, r * 2, 0, r * 2, r * 2, r * 2);
+        glow.addColorStop(0, `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.1)`);
+        glow.addColorStop(0.45, `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.1)`);
+        glow.addColorStop(0.6, `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.1)`);
+        glow.addColorStop(1, `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0)`);
+
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = glow;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        return canvas;
+    }
+
+    // =============================================
+    //                    Update
+    // =============================================
+    function update() {
+        updateBackgound();
+        updatePlayer();
+    }
+
+    function updateBackgound() {
+        background.x += 2;
+        background.y += 2;
+        if((background.x >= config.width || background.y >= config.height) && background.x % backgroundCellSize == 0) {
+            background.x = background.y = 0;
+        }
+    }
+
+    function updatePlayer() {
+        if (cursors.up.isDown) {
+            player.y -= playerSpeed;
+        }
+        if (cursors.down.isDown) {
+            player.y += playerSpeed;
+        }
+        if (cursors.left.isDown) {
+            player.x -= playerSpeed;
+        }
+        if (cursors.right.isDown) {
+            player.x += playerSpeed;
+        }
+    }
+</script>
+
+</body>
+</html>
