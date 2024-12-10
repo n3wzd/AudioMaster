@@ -18,8 +18,12 @@
 <body>
 
 <script>
+    function getRandomInt(min, max) {
+        return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+
     // =============================================
-    //                    Preload
+    //                    Scene
     // =============================================
     const config = {
         type: Phaser.AUTO,
@@ -27,7 +31,6 @@
         width: window.innerWidth,
         height: window.innerHeight,
         scene: {
-            preload: preload,
             create: create,
             update: update
         },
@@ -41,14 +44,155 @@
     const game = new Phaser.Game(config);
 
     let player;
-    const playerSpeed = 10;
-    const playerRadius = 20;
-
     let background;
-    const backgroundCellSize = 100;
+    let maker;
 
-    function preload() {
-        
+    // =============================================
+    //                    Class
+    // =============================================
+    class Player {
+        constructor(scene, x, y) {
+            this.speed = 10;
+            this.radius = 20;
+            this.container = scene.add.container(x, y);
+
+            const textureKey = 'playerTexture';
+            scene.textures.addCanvas(textureKey, createDonutCanvas({r: this.radius, rgb: [117, 249, 255]}));
+            this.sprite = scene.add.sprite(0, 0, textureKey);
+            this.container.add(this.sprite);
+
+            this.hitbox = new Phaser.Geom.Circle(x, y, this.radius);
+        }
+
+        update() {
+            this.move();
+        }
+
+        move() {
+            if (cursors.up.isDown) {
+                this.container.y -= this.speed;
+            }
+            if (cursors.down.isDown) {
+                this.container.y += this.speed;
+            }
+            if (cursors.left.isDown) {
+                this.container.x -= this.speed;
+            }
+            if (cursors.right.isDown) {
+                this.container.x += this.speed;
+            }
+            this.hitbox.x = this.container.x;
+            this.hitbox.y = this.container.y;
+        }
+
+        damage() {
+            console.log("damaged!");
+        }
+    }
+
+    class Background {
+        constructor(scene) {
+            this.background = scene.add.graphics();
+            this.cellSize = 100;
+
+            const color = 0x582bff;
+            const width = config.width + this.cellSize;
+            const height = config.height + this.cellSize;
+            for (let x = -width; x <= width; x += this.cellSize) {
+                this.background.lineStyle(1, color);
+                this.background.lineBetween(x, -height, x, height);
+                for(let i = 1; i < 5; i++) {
+                    const d = i * (this.cellSize / 5);
+                    this.background.lineStyle(1, color, 0.2);
+                    this.background.lineBetween(x + d, -height, x + d, height);
+                }
+            }
+            for (let y = -height; y <= height; y += this.cellSize) {
+                this.background.lineStyle(1, color);
+                this.background.lineBetween(-width, y, width, y);
+                for(let i = 1; i < 5; i++) {
+                    const d = i * (this.cellSize / 5);
+                    this.background.lineStyle(1, color, 0.2);
+                    this.background.lineBetween(-width, y + d, width, y + d);
+                }
+            }
+        }
+
+        update() {
+            this.move();
+        }
+
+        move() {
+            this.background.x += 2;
+            this.background.y += 2;
+            if((this.background.x >= config.width || this.background.y >= config.height) && this.background.x % this.cellSize == 0) {
+                this.background.x = this.background.y = 0;
+            }
+        }
+    }
+
+    class Bullet extends Phaser.GameObjects.Container {
+        constructor(scene, x, y) {
+            super(scene, x, y);
+            this.velocity = new Phaser.Math.Vector2(0, 0);
+            this.radius = 20;
+
+            const textureKey = 'bulletTexture';
+            if(!scene.textures.exists(textureKey)) {
+                scene.textures.addCanvas(textureKey, createDonutCanvas({r: this.radius, rgb: [255, 86, 127]}));
+            }
+            this.sprite = scene.add.sprite(0, 0, textureKey);
+            this.add(this.sprite);
+
+            this.hitbox = new Phaser.Geom.Circle(x, y, this.radius);
+        }
+
+        update() {
+            this.move();
+            this.checkCollision();
+
+            if(this.x < -this.radius || this.x > config.width + this.radius || this.y < -this.radius || this.y > config.height + this.radius) {
+                this.setActive(false).setVisible(false);
+            }
+        }
+
+        move() {
+            this.x += this.velocity.x;
+            this.y += this.velocity.y;
+            this.hitbox.x = this.x;
+            this.hitbox.y = this.y;
+        }
+
+        checkCollision() {
+            if(Phaser.Geom.Intersects.CircleToCircle(player.hitbox, this.hitbox)) {
+                player.damage();
+            }
+        }
+    }
+
+    class BulletMaker {
+        constructor(scene) {
+            const group = scene.add.group({
+                classType: Bullet,
+                maxSize: 100,
+                runChildUpdate: true,
+            });
+
+            function create() {
+                const item = group.get(getRandomInt(0, config.width), -10);
+                if (item) {
+                    item.setActive(true).setVisible(true);
+                    item.velocity.y = getRandomInt(5, 15);
+                }
+            }
+
+            scene.time.addEvent({
+                delay: 100,
+                callback: create,
+                callbackScope: scene,
+                loop: true
+            });
+        }
     }
 
     // =============================================
@@ -61,58 +205,24 @@
             this.cameras.resize(width, height);
         });
 
-        createBackground(this);
-        createPlayer(this);
-        createBullet(this);
+        background = new Background(this);
+        player = new Player(this, window.innerWidth / 2, window.innerHeight / 2);
+        maker = new BulletMaker(this);
 
         cursors = this.input.keyboard.createCursorKeys();
     }
 
-    function createBackground(game) {
-        background = game.add.graphics();
-        const color = 0x582bff;
-        const width = config.width + backgroundCellSize;
-        const height = config.height + backgroundCellSize;
-        for (let x = -width; x <= width; x += backgroundCellSize) {
-            background.lineStyle(1, color);
-            background.lineBetween(x, -height, x, height);
-            for(let i = 1; i < 5; i++) {
-                const d = i * (backgroundCellSize / 5);
-                background.lineStyle(1, color, 0.2);
-                background.lineBetween(x + d, -height, x + d, height);
-            }
-        }
-        for (let y = -height; y <= height; y += backgroundCellSize) {
-            background.lineStyle(1, color);
-            background.lineBetween(-width, y, width, y);
-            for(let i = 1; i < 5; i++) {
-                const d = i * (backgroundCellSize / 5);
-                background.lineStyle(1, color, 0.2);
-                background.lineBetween(-width, y + d, width, y + d);
-            }
-        }
-    }
-
-    function createPlayer(game) {
-        player = game.add.container(window.innerWidth / 2, window.innerHeight / 2);
-
-        game.textures.addCanvas('playerTexture', createDonutCanvas({r: playerRadius, rgb: [117, 249, 255]}));
-        const sprite = game.add.sprite(0, 0, 'playerTexture');
-        player.add(sprite);
-    }
-
-    function createBullet(game) {
-        bullet = game.add.container(300, 400);
-
-        game.textures.addCanvas('bulletTexture', createDonutCanvas({r: 20, rgb: [255, 86, 127]}));
-        const sprite = game.add.sprite(0, 0, 'bulletTexture');
-        bullet.add(sprite);
+    // =============================================
+    //                    Update
+    // =============================================
+    function update() {
+        background.update();
+        player.update();
     }
     
     // =============================================
     //                    Canvas
     // =============================================
-
     function createDonutCanvas({r, rgb}) {
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
@@ -144,37 +254,6 @@
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
         return canvas;
-    }
-
-    // =============================================
-    //                    Update
-    // =============================================
-    function update() {
-        updateBackgound();
-        updatePlayer();
-    }
-
-    function updateBackgound() {
-        background.x += 2;
-        background.y += 2;
-        if((background.x >= config.width || background.y >= config.height) && background.x % backgroundCellSize == 0) {
-            background.x = background.y = 0;
-        }
-    }
-
-    function updatePlayer() {
-        if (cursors.up.isDown) {
-            player.y -= playerSpeed;
-        }
-        if (cursors.down.isDown) {
-            player.y += playerSpeed;
-        }
-        if (cursors.left.isDown) {
-            player.x -= playerSpeed;
-        }
-        if (cursors.right.isDown) {
-            player.x += playerSpeed;
-        }
     }
 </script>
 
