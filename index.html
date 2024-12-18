@@ -170,28 +170,98 @@
         }
     }
 
-    class BulletMaker {
+    class System {
         constructor(scene) {
-            const group = scene.add.group({
+            this.bulletGroup = scene.add.group({
                 classType: Bullet,
                 maxSize: 100,
                 runChildUpdate: true,
             });
 
-            function create() {
-                const item = group.get(getRandomInt(0, config.width), -10);
-                if (item) {
-                    item.setActive(true).setVisible(true);
-                    item.velocity.y = getRandomInt(5, 15);
+            this.active = false;
+        }
+
+        initAudio(url) {
+            this.audioElement = new Audio(url);
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            this.audioSource = this.audioContext.createMediaElementSource(this.audioElement);
+            this.analyser = this.audioContext.createAnalyser();
+
+            this.audioSource.connect(this.analyser);
+            this.analyser.connect(this.audioContext.destination);
+            this.analyser.fftSize = 1024;
+            this.maxFrequency = this.audioContext.sampleRate / 2 * (this.analyser.fftSize / 2048);
+
+            this.bufferLength = this.analyser.frequencyBinCount;
+            this.dataArray = new Uint8Array(this.bufferLength);
+
+            this.audioElement.volume = 0.5;
+            this.audioElement.play();
+            this.active = true;
+        }
+
+        fileOpen() {
+            const inputElement = document.createElement('input');
+            inputElement.type = 'file';
+            inputElement.accept = 'audio/*';
+
+            inputElement.addEventListener('change', (event) => {
+                const file = event.target.files[0];
+                if (file) {
+                    this.initAudio(URL.createObjectURL(file));
+                }
+            });
+            inputElement.click();
+        }
+
+        createBullet(speedMin, speedMax) {
+            const item = this.bulletGroup.get(getRandomInt(0, config.width), -10);
+            if (item) {
+                item.setActive(true).setVisible(true);
+                item.velocity.y = getRandomInt(speedMin, speedMax);
+            }
+        }
+
+        isPeak() {
+            const threshold = 230;
+            let res = false;
+            for (let i = 0; i < this.bufferLength; i++) {
+                res |= this.dataArray[i] >= threshold;
+            }
+            return res;
+        }
+
+        getFrequencyBand() {
+            const freqLow = 200;
+            const freqMid = 5000;
+            const idxLow = Math.round((freqLow / this.maxFrequency) * (this.bufferLength - 1));
+            const idxMid = Math.round((freqMid / this.maxFrequency) * (this.bufferLength - 1));
+
+            const rms = [0, 0, 0];
+            for (let i = 0; i < this.bufferLength; i++) {
+                if(i < idxLow) {
+                    rms[0] += this.dataArray[i] ** 2;
+                } else if(i < idxMid) {
+                    rms[1] += this.dataArray[i] ** 2;
+                } else {
+                    rms[2] += this.dataArray[i] ** 2;
                 }
             }
+            rms[0] /= idxLow;
+            rms[1] /= (idxMid - idxLow);
+            rms[2] /= (this.bufferLength - idxMid);
+            return rms.map(v => Math.sqrt(v) / 255);
+        }
 
-            scene.time.addEvent({
-                delay: 100,
-                callback: create,
-                callbackScope: scene,
-                loop: true
-            });
+        update() {
+            if(this.active) {
+                this.analyser.getByteFrequencyData(this.dataArray);
+                if(this.isPeak()) {
+                    const rms = this.getFrequencyBand();
+                    const minSpeed = 1 + rms[0] * 2 + rms[1] * 10 + rms[2] * 30;
+                    this.createBullet(minSpeed, minSpeed * 1.1);
+                }
+            }
         }
     }
 
@@ -207,7 +277,13 @@
 
         background = new Background(this);
         player = new Player(this, window.innerWidth / 2, window.innerHeight / 2);
-        maker = new BulletMaker(this);
+        system = new System(this);
+
+        const playButton = this.add.text(300, 250, 'Play', { fontSize: '32px', fill: '#fff' })
+        .setInteractive()
+        .on('pointerdown', () => {
+            system.fileOpen();
+        });
 
         cursors = this.input.keyboard.createCursorKeys();
     }
@@ -218,6 +294,7 @@
     function update() {
         background.update();
         player.update();
+        system.update();
     }
     
     // =============================================
