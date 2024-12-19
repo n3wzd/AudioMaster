@@ -170,18 +170,8 @@
         }
     }
 
-    class System {
-        constructor(scene) {
-            this.bulletGroup = scene.add.group({
-                classType: Bullet,
-                maxSize: 100,
-                runChildUpdate: true,
-            });
-
-            this.active = false;
-        }
-
-        initAudio(url) {
+    class AudioSystem {
+        init(url) {
             this.audioElement = new Audio(url);
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
             this.audioSource = this.audioContext.createMediaElementSource(this.audioElement);
@@ -197,41 +187,26 @@
 
             this.audioElement.volume = 0.5;
             this.audioElement.play();
-            this.active = true;
+
+            this.frequencyRMSWindowSum = 0;
+            this.frequencyRMSWindowSize = 2;
+            this.frequencyRMSWindow = [];
         }
 
-        fileOpen() {
-            const inputElement = document.createElement('input');
-            inputElement.type = 'file';
-            inputElement.accept = 'audio/*';
-
-            inputElement.addEventListener('change', (event) => {
-                const file = event.target.files[0];
-                if (file) {
-                    this.initAudio(URL.createObjectURL(file));
-                }
-            });
-            inputElement.click();
+        get peak() {
+            const movingAverage = this.frequencyRMSWindowSum / this.frequencyRMSWindowSize;
+            return this.rms > movingAverage;
         }
 
-        createBullet(speedMin, speedMax) {
-            const item = this.bulletGroup.get(getRandomInt(0, config.width), -10);
-            if (item) {
-                item.setActive(true).setVisible(true);
-                item.velocity.y = getRandomInt(speedMin, speedMax);
-            }
-        }
-
-        isPeak() {
-            const threshold = 230;
-            let res = false;
+        get rms() {
+            let rms = 0;
             for (let i = 0; i < this.bufferLength; i++) {
-                res |= this.dataArray[i] >= threshold;
+                rms += this.dataArray[i] ** 2;
             }
-            return res;
+            return Math.sqrt(rms / this.bufferLength) / 255;
         }
 
-        getFrequencyBand() {
+        get rmsFromFrequencyBand() {
             const freqLow = 200;
             const freqMid = 5000;
             const idxLow = Math.round((freqLow / this.maxFrequency) * (this.bufferLength - 1));
@@ -254,12 +229,71 @@
         }
 
         update() {
+            this.analyser.getByteFrequencyData(this.dataArray);
+            if (this.frequencyRMSWindow.length > 0) {
+                this.frequencyRMSWindowSum += this.frequencyRMSWindow[this.frequencyRMSWindow.length - 1];
+            }
+            if (this.frequencyRMSWindow.length > this.frequencyRMSWindowSize) {
+                this.frequencyRMSWindowSum -= this.frequencyRMSWindow[0];
+                this.frequencyRMSWindow.shift();
+            }
+            this.frequencyRMSWindow.push(this.rms);
+        }
+    }
+
+    class System {
+        constructor(scene) {
+            this.bulletGroup = scene.add.group({
+                classType: Bullet,
+                maxSize: 100,
+                runChildUpdate: true,
+            });
+
+            this.audioSystem = new AudioSystem();
+            this.active = false;
+
+            this.bulletGeneratingLimit = 5;
+            this.bulletGeneratingTime = 0;
+        }
+
+        fileOpen() {
+            const inputElement = document.createElement('input');
+            inputElement.type = 'file';
+            inputElement.accept = 'audio/*';
+
+            inputElement.addEventListener('change', (event) => {
+                const file = event.target.files[0];
+                if (file) {
+                    this.audioSystem.init(URL.createObjectURL(file));
+                    this.active = true;
+                }
+            });
+            inputElement.click();
+        }
+
+        createBullet(speedMin, speedMax) {
+            const item = this.bulletGroup.get(getRandomInt(0, config.width), -10);
+            if (item) {
+                item.setActive(true).setVisible(true);
+                item.velocity.y = getRandomInt(speedMin, speedMax);
+            }
+        }
+
+        update() {
             if(this.active) {
-                this.analyser.getByteFrequencyData(this.dataArray);
-                if(this.isPeak()) {
-                    const rms = this.getFrequencyBand();
-                    const minSpeed = 1 + rms[0] * 2 + rms[1] * 10 + rms[2] * 30;
-                    this.createBullet(minSpeed, minSpeed * 1.1);
+                this.audioSystem.update();
+
+                if (this.audioSystem.peak) {
+                    this.bulletGeneratingTime = this.bulletGeneratingLimit;
+                }
+                if (this.bulletGeneratingTime > 0) {
+                    const rmsF = this.audioSystem.rmsFromFrequencyBand;
+                    const speed = 1 + rmsF[0] * 2 + rmsF[1] * 8 + rmsF[2] * 20;
+                    const limit = Math.round(1 + rmsF[0] * 20 + rmsF[1] * 8 + rmsF[2] * 2);
+                    for(let i = 0; i < limit; i++) {
+                        this.createBullet(speed, speed * 1.1);
+                    }
+                    this.bulletGeneratingTime--;
                 }
             }
         }
