@@ -31,6 +31,7 @@
         width: window.innerWidth,
         height: window.innerHeight,
         scene: {
+            preload: preload,
             create: create,
             update: update
         },
@@ -47,6 +48,15 @@
     let background;
     let maker;
 
+    const baseSize = 40;
+    function preload() {
+        this.textures.addCanvas('circle', createCircleCanvas({r: baseSize / 2}));
+        this.textures.addCanvas('square', createSquareCanvas({w: baseSize * 0.8}));
+        this.textures.addCanvas('triangle', createTriangleCanvas({w: baseSize * 0.8}));
+        this.textures.addCanvas('hexagon', createHexagonCanvas({w: baseSize * 0.8}));
+        this.textures.addCanvas('cross', createCrossCanvas({w: baseSize}));
+    }
+
     // =============================================
     //                    Class
     // =============================================
@@ -56,9 +66,8 @@
             this.radius = 20;
             this.container = scene.add.container(x, y);
 
-            const textureKey = 'playerTexture';
-            scene.textures.addCanvas(textureKey, createDonutCanvas({r: this.radius, rgb: [117, 249, 255]}));
-            this.sprite = scene.add.sprite(0, 0, textureKey);
+            this.sprite = scene.add.sprite(0, 0, 'circle');
+            this.sprite.setTint(0x75f9ff);
             this.container.add(this.sprite);
 
             this.hitbox = new Phaser.Geom.Circle(x, y, this.radius);
@@ -135,16 +144,18 @@
         constructor(scene, x, y) {
             super(scene, x, y);
             this.velocity = new Phaser.Math.Vector2(0, 0);
+            this.angularVelocity = 0;
             this.radius = 20;
 
-            const textureKey = 'bulletTexture';
-            if(!scene.textures.exists(textureKey)) {
-                scene.textures.addCanvas(textureKey, createDonutCanvas({r: this.radius, rgb: [255, 86, 127]}));
-            }
-            this.sprite = scene.add.sprite(0, 0, textureKey);
+            this.sprite = scene.add.sprite(0, 0, 'circle');
+            this.sprite.setTint(0xff567f);
             this.add(this.sprite);
 
             this.hitbox = new Phaser.Geom.Circle(x, y, this.radius);
+        }
+
+        init(textureKey) {
+            this.sprite.setTexture(textureKey);
         }
 
         update() {
@@ -161,6 +172,7 @@
             this.y += this.velocity.y;
             this.hitbox.x = this.x;
             this.hitbox.y = this.y;
+            this.rotation += this.angularVelocity;
         }
 
         checkCollision() {
@@ -188,6 +200,8 @@
             this.audioElement.volume = 0.5;
             this.audioElement.play();
 
+            this.frequencyLow = 200;
+            this.frequencyMid = 5000;
             this.frequencyRMSWindowSum = 0;
             this.frequencyRMSWindowSize = 2;
             this.frequencyRMSWindow = [];
@@ -195,37 +209,69 @@
 
         get peak() {
             const movingAverage = this.frequencyRMSWindowSum / this.frequencyRMSWindowSize;
-            return this.rms > movingAverage;
+            return this.rms.all > movingAverage;
         }
 
         get rms() {
-            let rms = 0;
-            for (let i = 0; i < this.bufferLength; i++) {
-                rms += this.dataArray[i] ** 2;
-            }
-            return Math.sqrt(rms / this.bufferLength) / 255;
+            return this.executeByFrequencyBand(this.rmsRange);
         }
 
-        get rmsFromFrequencyBand() {
-            const freqLow = 200;
-            const freqMid = 5000;
-            const idxLow = Math.round((freqLow / this.maxFrequency) * (this.bufferLength - 1));
-            const idxMid = Math.round((freqMid / this.maxFrequency) * (this.bufferLength - 1));
+        get average() {
+            return this.executeByFrequencyBand(this.averageRange);
+        }
 
-            const rms = [0, 0, 0];
-            for (let i = 0; i < this.bufferLength; i++) {
-                if(i < idxLow) {
-                    rms[0] += this.dataArray[i] ** 2;
-                } else if(i < idxMid) {
-                    rms[1] += this.dataArray[i] ** 2;
-                } else {
-                    rms[2] += this.dataArray[i] ** 2;
-                }
+        get deviation() {
+            return this.executeByFrequencyBand(this.deviationRange);
+        }
+
+        get centroid() {
+            return this.executeByFrequencyBand(this.centroidRange);
+        }
+
+        executeByFrequencyBand(callback) {
+            const low = Math.round((this.frequencyLow / this.maxFrequency) * this.bufferLength);
+            const mid = Math.round((this.frequencyMid / this.maxFrequency) * this.bufferLength);
+            const high = this.bufferLength;
+            const boundCallback = callback.bind(this);
+            return {
+                all: boundCallback(0, high),
+                low: boundCallback(0, low), 
+                mid: boundCallback(low, mid),
+                high: boundCallback(mid, high)
+            };
+        }
+
+        rmsRange(lo, hi) {
+            let sum = 0;
+            for (let i = lo; i < hi; i++) {
+                sum += this.dataArray[i] ** 2;
             }
-            rms[0] /= idxLow;
-            rms[1] /= (idxMid - idxLow);
-            rms[2] /= (this.bufferLength - idxMid);
-            return rms.map(v => Math.sqrt(v) / 255);
+            return Math.sqrt(sum / (hi - lo)) / 255;
+        }
+
+        averageRange(lo, hi) {
+            let sum = 0;
+            for (let i = lo; i < hi; i++) {
+                sum += this.dataArray[i];
+            }
+            return (sum / (hi - lo)) / 255;
+        }
+
+        deviationRange(lo, hi) {
+            let sum = 0, avg = averageRange(lo, hi);
+            for (let i = lo; i < hi; i++) {
+                sum = (this.dataArray[i] - avg) ** 2;
+            }
+            return Math.sqrt(sum / (hi - lo)) / 255;
+        }
+
+        centroidRange(lo, hi) {
+            let sum1 = 0, sum2 = 0;
+            for (let i = lo; i < hi; i++) {
+                sum1 += i * this.dataArray[i];
+                sum2 += this.dataArray[i];
+            }
+            return ((sum1 / sum2) - lo) / (hi - lo);
         }
 
         update() {
@@ -237,7 +283,7 @@
                 this.frequencyRMSWindowSum -= this.frequencyRMSWindow[0];
                 this.frequencyRMSWindow.shift();
             }
-            this.frequencyRMSWindow.push(this.rms);
+            this.frequencyRMSWindow.push(this.rms.all);
         }
     }
 
@@ -271,11 +317,13 @@
             inputElement.click();
         }
 
-        createBullet(speedMin, speedMax) {
+        createBullet(speed, shape) {
             const item = this.bulletGroup.get(getRandomInt(0, config.width), -10);
             if (item) {
                 item.setActive(true).setVisible(true);
-                item.velocity.y = getRandomInt(speedMin, speedMax);
+                item.init(shape);
+                item.velocity.y = getRandomInt(speed, speed * 1.1);
+                item.angularVelocity = (Math.PI / 512) * speed;
             }
         }
 
@@ -287,11 +335,13 @@
                     this.bulletGeneratingTime = this.bulletGeneratingLimit;
                 }
                 if (this.bulletGeneratingTime > 0) {
-                    const rmsF = this.audioSystem.rmsFromFrequencyBand;
-                    const speed = 1 + rmsF[0] * 2 + rmsF[1] * 8 + rmsF[2] * 20;
-                    const limit = Math.round(1 + rmsF[0] * 20 + rmsF[1] * 8 + rmsF[2] * 2);
+                    const rms = this.audioSystem.rms;
+                    const cen = this.audioSystem.centroid;
+                    const speed = 1 + rms.low * 2 + rms.mid * 8 + rms.high * 20;
+                    const limit = Math.round(1 + rms.low * 20 + rms.mid * 8 + rms.high * 2);
+                    const arr = ['circle', 'square', 'triangle', 'hexagon', 'cross']
                     for(let i = 0; i < limit; i++) {
-                        this.createBullet(speed, speed * 1.1);
+                        this.createBullet(speed, arr[getRandomInt(0, arr.length - 1)]);
                     }
                     this.bulletGeneratingTime--;
                 }
@@ -334,9 +384,10 @@
     // =============================================
     //                    Canvas
     // =============================================
-    function createDonutCanvas({r, rgb}) {
+    function createCircleCanvas({r}) {
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
+        const rgb = [255, 255, 255];
 
         canvas.width = r * 4;
         canvas.height = r * 4;
@@ -354,7 +405,133 @@
         ctx.closePath();
         ctx.fill();
 
-        const glow = ctx.createRadialGradient(r * 2, r * 2, 0, r * 2, r * 2, r * 2);
+        createContextGlow(canvas, ctx, r * 2, r * 2, r * 2, rgb);
+        return canvas;
+    }
+
+    function createSquareCanvas({w}) {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const rgb = [255, 255, 255];
+
+        canvas.width = w * 4;
+        canvas.height = w * 4;
+
+        ctx.strokeStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 1)`;
+        ctx.lineWidth = w / 5;
+        ctx.strokeRect(w * 1.5, w * 1.5, w, w);
+
+        createContextGlow(canvas, ctx, w * 2, w * 2, w * 1.2, rgb);
+        return canvas;
+    }
+
+    function createTriangleCanvas({w}) {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const rgb = [255, 255, 255];
+
+        canvas.width = w * 4;
+        canvas.height = w * 4;
+
+        const centerX = w * 2;
+        const centerY = w * 2;
+        const sideLength = w * 0.7;
+        const points = [];
+        for (let i = 0; i < 3; i++) {
+            const angle = (Math.PI / 2) + (i * (2 * Math.PI / 3));
+            const x = centerX + sideLength * Math.cos(angle);
+            const y = centerY + sideLength * Math.sin(angle);
+            points.push({ x, y });
+        }
+        
+        ctx.strokeStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 1)`;
+        ctx.lineWidth = w / 5;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        ctx.lineTo(points[1].x, points[1].y);
+        ctx.lineTo(points[2].x, points[2].y);
+        ctx.closePath();
+        ctx.stroke();
+
+        createContextGlow(canvas, ctx, w * 2, w * 2, w * 1.2, rgb);
+        return canvas;
+    }
+
+    function createHexagonCanvas({w}) {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const rgb = [255, 255, 255];
+
+        canvas.width = w * 4;
+        canvas.height = w * 4;
+
+        const centerX = w * 2;
+        const centerY = w * 2;
+        const radius = w * 0.7;
+        const angleOffset = Math.PI / 6;
+        const points = [];
+        for (let i = 0; i < 6; i++) {
+            const angle = angleOffset + (i * (2 * Math.PI / 6));
+            const x = centerX + radius * Math.cos(angle);
+            const y = centerY + radius * Math.sin(angle);
+            points.push({ x, y });
+        }
+        
+        ctx.strokeStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 1)`;
+        ctx.lineWidth = w / 5;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) {
+            ctx.lineTo(points[i].x, points[i].y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+
+        createContextGlow(canvas, ctx, w * 2, w * 2, w * 1.2, rgb);
+        return canvas;
+    }
+
+    function createCrossCanvas({w}) {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const rgb = [255, 255, 255];
+
+        canvas.width = w * 4;
+        canvas.height = w * 4;
+
+        const originX = w * 1.5;
+        const originY = w * 1.5;
+        const d = w / 3;
+
+        const points = [
+            { x: 1, y: 0 }, { x: 2, y: 0 }, { x: 2, y: 1 }, 
+            { x: 3, y: 1 }, { x: 3, y: 2 }, { x: 2, y: 2 }, 
+            { x: 2, y: 3 }, { x: 1, y: 3 }, { x: 1, y: 2 }, 
+            { x: 0, y: 2 }, { x: 0, y: 1 }, { x: 1, y: 1 }, { x: 1, y: 0 }, 
+        ];
+
+        ctx.strokeStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 1)`;
+        ctx.lineWidth = w / 6;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(originX + points[0].x * d, originY + points[0].y * d);
+        for (let i = 1; i < points.length; i++) {
+            ctx.lineTo(originX + points[i].x * d, originY + points[i].y * d);
+        }
+        ctx.closePath();
+        ctx.stroke();
+
+        createContextGlow(canvas, ctx, w * 2, w * 2, w * 1.2, rgb);
+        return canvas;
+    }
+
+    function createContextGlow(canvas, ctx, x, y, r, rgb) {
+        const glow = ctx.createRadialGradient(x, y, 0, x, y, r);
         glow.addColorStop(0, `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.1)`);
         glow.addColorStop(0.45, `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.1)`);
         glow.addColorStop(0.6, `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.1)`);
@@ -363,9 +540,8 @@
         ctx.globalCompositeOperation = 'source-over';
         ctx.fillStyle = glow;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        return canvas;
     }
+
 </script>
 
 </body>
