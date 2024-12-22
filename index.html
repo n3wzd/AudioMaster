@@ -143,9 +143,12 @@
     class Bullet extends Phaser.GameObjects.Container {
         constructor(scene, x, y) {
             super(scene, x, y);
-            this.velocity = new Phaser.Math.Vector2(0, 0);
+            this.moveFunction = (x, y, t) => ({ x, y });
+            this.startPosition = { x: 0, y: 0 };
             this.angularVelocity = 0;
             this.radius = 20;
+            this.deltaTime = 0;
+            this.lifeTimeFrame = 300;
 
             this.sprite = scene.add.sprite(0, 0, 'circle');
             this.sprite.setTint(0xff567f);
@@ -154,25 +157,30 @@
             this.hitbox = new Phaser.Geom.Circle(x, y, this.radius);
         }
 
-        init(textureKey) {
+        activate(textureKey) {
             this.sprite.setTexture(textureKey);
+            this.startPosition = { x: this.x, y: this.y };
+            this.deltaTime = 0;
+            this.setActive(true).setVisible(true);
         }
 
         update() {
             this.move();
             this.checkCollision();
 
-            if(this.x < -this.radius || this.x > config.width + this.radius || this.y < -this.radius || this.y > config.height + this.radius) {
+            if(this.active && this.deltaTime > this.lifeTimeFrame && 
+                    (this.x < -this.radius || this.x > config.width + this.radius ||
+                    this.y < -this.radius || this.y > config.height + this.radius)) {
                 this.setActive(false).setVisible(false);
             }
         }
 
         move() {
-            this.x += this.velocity.x;
-            this.y += this.velocity.y;
+            ({x: this.x, y: this.y} = this.moveFunction(this.startPosition, this.deltaTime));
             this.hitbox.x = this.x;
             this.hitbox.y = this.y;
             this.rotation += this.angularVelocity;
+            this.deltaTime++;
         }
 
         checkCollision() {
@@ -209,7 +217,7 @@
 
         get peak() {
             const movingAverage = this.frequencyRMSWindowSum / this.frequencyRMSWindowSize;
-            return this.rms.all > movingAverage;
+            return this.rms.all > movingAverage * 1.01;
         }
 
         get rms() {
@@ -291,14 +299,14 @@
         constructor(scene) {
             this.bulletGroup = scene.add.group({
                 classType: Bullet,
-                maxSize: 100,
+                maxSize: 300,
                 runChildUpdate: true,
             });
 
             this.audioSystem = new AudioSystem();
             this.active = false;
 
-            this.bulletGeneratingLimit = 5;
+            this.bulletGeneratingLimit = 3;
             this.bulletGeneratingTime = 0;
         }
 
@@ -317,13 +325,54 @@
             inputElement.click();
         }
 
+        createLinearMoveFunction(velocity) {
+            return (position, t) => ({
+                x: position.x + velocity.x * t,
+                y: position.y + velocity.y * t,
+            });
+        }
+
+        createSineWaveMoveFunction(moveFunction, movingFunctionDelta, frequency, amplitude) {
+            return function(position, t) {
+                const { x, y } = moveFunction(position, t);
+                const { dx, dy } = movingFunctionDelta;
+                const magnitude = Math.sqrt(dx ** 2 + dy ** 2);
+                const normalX = -dy / magnitude;
+                const normalY = dx / magnitude;
+                const wave = Math.sin(frequency * t) * amplitude;
+                return {
+                    x: x + wave * normalX,
+                    y: y + wave * normalY,
+                }
+            };
+        }
+
+        createCircleMoveFunction(moveFunction, radius, angularVelocity, growthRate = 0) {
+            return function(position, t) {
+                const { x, y } = moveFunction(position, t);
+                return {
+                    x: x + (radius + growthRate * t) * Math.cos(angularVelocity * t),
+                    y: y + (radius + growthRate * t) * Math.sin(angularVelocity * t),
+                }
+            };
+        }
+
         createBullet(speed, shape) {
-            const item = this.bulletGroup.get(getRandomInt(0, config.width), -10);
+            const rx = getRandomInt(0, config.width), ry = getRandomInt(0, config.height);
+            const dx = [0, 1, 0, -1], dy = [1, 0, -1, 0], d = getRandomInt(0, 3), p = 200;
+            const item = this.bulletGroup.get([rx, -p, rx, config.width + p][d], [-p, ry, config.height + p, ry][d]);
             if (item) {
-                item.setActive(true).setVisible(true);
-                item.init(shape);
-                item.velocity.y = getRandomInt(speed, speed * 1.1);
+                const velocity = { x: getRandomInt(speed, speed * 1.1) * dx[d], y: getRandomInt(speed, speed * 1.1) * dy[d] };
+                let moveFunction = this.createLinearMoveFunction({ x: velocity.x, y: velocity.y });
+                if(getRandomInt(0, 5) == 0) {
+                    moveFunction = this.createSineWaveMoveFunction(moveFunction, { dx: velocity.x, dy: velocity.y }, getRandomInt(speed * 0.5, speed) * 0.01, getRandomInt(100, 200));
+                }
+                if(getRandomInt(0, 5) == 0) {
+                    moveFunction = this.createCircleMoveFunction(moveFunction, getRandomInt(50, 200), getRandomInt(speed * 0.5, speed) * 0.01, getRandomInt(0, 5) === 0 ? 0.01 : 0);
+                }
+                item.moveFunction = moveFunction;
                 item.angularVelocity = (Math.PI / 512) * speed;
+                item.activate(shape);
             }
         }
 
@@ -337,8 +386,8 @@
                 if (this.bulletGeneratingTime > 0) {
                     const rms = this.audioSystem.rms;
                     const cen = this.audioSystem.centroid;
-                    const speed = 1 + rms.low * 2 + rms.mid * 8 + rms.high * 20;
-                    const limit = Math.round(1 + rms.low * 20 + rms.mid * 8 + rms.high * 2);
+                    const speed = 1 + rms.low * 1 + rms.mid * 4 + rms.high * 10;
+                    const limit = Math.round((rms.low * 10 + rms.mid * 4 + rms.high * 1) * 0.05);
                     const arr = ['circle', 'square', 'triangle', 'hexagon', 'cross']
                     for(let i = 0; i < limit; i++) {
                         this.createBullet(speed, arr[getRandomInt(0, arr.length - 1)]);
