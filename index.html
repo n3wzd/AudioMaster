@@ -67,7 +67,7 @@
             this.container = scene.add.container(x, y);
 
             this.sprite = scene.add.sprite(0, 0, 'circle');
-            this.sprite.setTint(0x75f9ff);
+            this.sprite.setTint(0xffffff);
             this.container.add(this.sprite);
 
             this.hitbox = new Phaser.Geom.Circle(x, y, this.radius);
@@ -151,16 +151,16 @@
             this.lifeTimeFrame = 300;
 
             this.sprite = scene.add.sprite(0, 0, 'circle');
-            this.sprite.setTint(0xff567f);
             this.add(this.sprite);
 
             this.hitbox = new Phaser.Geom.Circle(x, y, this.radius);
         }
 
-        activate(textureKey) {
+        activate(textureKey, color) {
             this.sprite.setTexture(textureKey);
             this.startPosition = { x: this.x, y: this.y };
             this.deltaTime = 0;
+            this.sprite.setTint(color);
             this.setActive(true).setVisible(true);
         }
 
@@ -191,7 +191,7 @@
     }
 
     class AudioSystem {
-        init(url) {
+        async init(url) {
             this.audioElement = new Audio(url);
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
             this.audioSource = this.audioContext.createMediaElementSource(this.audioElement);
@@ -206,17 +206,19 @@
             this.bufferLength = this.analyser.frequencyBinCount;
             this.dataArray = new Uint8Array(this.bufferLength);
 
-            this.audioElement.volume = 0.5;
-            this.audioElement.play();
-
-            this.peakThreshold = 1;
+            this.peakThreshold = 1.025;
             this.frequencyLow = 200;
             this.frequencyMid = 5000;
             this.frequencyRMSWindowSum = 0;
-            this.frequencyRMSWindowSize = 2;
+            this.frequencyRMSWindowSize = 8;
             this.frequencyRMSWindow = [];
+            this.fftTimeResolution = this.fftSize / this.audioContext.sampleRate;
+            this.fftMinInterval = Math.round(0.35 / this.fftTimeResolution);
 
-            this.getGerne();
+            this.gerneColor = await this.getGerneColor();
+
+            this.audioElement.volume = 0.5;
+            this.audioElement.play();
         }
 
         get peak() {
@@ -240,94 +242,71 @@
             return this.executeByFrequencyBand(this.centroidRange);
         }
 
-        getGerne() {
+        async getGerneColor() {
             const processAudioBuffer = (audioBuffer) => {
-                const segmentSize = 1024;
-                const frequencyRMSWindow = [];
-                let frequencyRMSWindowSum = 0;
-                let centroidSum = 0;
-                let bpmSum = 0;
-                
-                function padToPowerOfTwo(segment) {
-                    const nextPowerOfTwo = Math.pow(2, Math.ceil(Math.log2(segment.length)));
-                    const paddedSegment = new Array(nextPowerOfTwo).fill(0);
-                    for (let i = 0; i < segment.length; i++) {
-                        paddedSegment[i] = segment[i];
-                    }
-                    return paddedSegment;
-                }
-
                 const data = audioBuffer.getChannelData(0);
-                for (let i = 0; i < data.length; i += segmentSize) {
-                    const segment = padToPowerOfTwo(data.slice(i, i + segmentSize));
-                    const fftData = performFFT(segment);
-
-                    if (frequencyRMSWindow.length > 0) {
-                        frequencyRMSWindowSum += frequencyRMSWindow[frequencyRMSWindow.length - 1];
-                    }
-                    if (frequencyRMSWindow.length > this.frequencyRMSWindowSize) {
-                        frequencyRMSWindowSum -= frequencyRMSWindow[0];
-                        frequencyRMSWindow.shift();
-                    }
-
-                    const rmsValue = this.rmsRange(0, segmentSize, fftData);
-                    frequencyRMSWindow.push(rmsValue);
-                    centroidSum += this.centroidRange(0, segmentSize, fftData);
-
-                    const movingAverage = frequencyRMSWindowSum / this.frequencyRMSWindowSize;
-                    bpmSum += (rmsValue > movingAverage * this.peakThreshold) ? 1 : 0;
-                }
-
-                const centroidAverage = centroidSum / data.length;
-                const bpm = (bpmSum / this.audioElement.duration) * 60;
-                console.log(centroidAverage, bpm);
-            }
-
-            function performFFT(segment) {
-                const N = segment.length;
-                const real = new Array(N).fill(0);
-                const imag = new Array(N).fill(0);
-
+                const N = data.length;
+                let sum = 0;
                 for (let i = 0; i < N; i++) {
-                    real[i] = segment[i];
+                    sum += data[i] * data[i];
                 }
-
-                fft(real, imag);
-
-                const magnitude = real.map((re, idx) => Math.sqrt(re * re + imag[idx] * imag[idx]));
-                return magnitude;
+                return Math.sqrt(sum / N);
             }
 
-            function fft(real, imag) {
-                const N = real.length;
-                if (N <= 1) return;
-
-                const evenReal = real.filter((_, idx) => idx % 2 === 0);
-                const oddReal = real.filter((_, idx) => idx % 2 !== 0);
-                const evenImag = imag.filter((_, idx) => idx % 2 === 0);
-                const oddImag = imag.filter((_, idx) => idx % 2 !== 0);
-
-                fft(evenReal, evenImag);
-                fft(oddReal, oddImag);
-
-                for (let k = 0; k < N / 2; k++) {
-                    const tReal = Math.cos(-2 * Math.PI * k / N) * oddReal[k] - Math.sin(-2 * Math.PI * k / N) * oddImag[k];
-                    const tImag = Math.sin(-2 * Math.PI * k / N) * oddReal[k] + Math.cos(-2 * Math.PI * k / N) * oddImag[k];
-
-                    real[k] = evenReal[k] + tReal;
-                    imag[k] = evenImag[k] + tImag;
-                    real[k + N / 2] = evenReal[k] - tReal;
-                    imag[k + N / 2] = evenImag[k] - tImag;
+            const classifyGenre = (rmsValue) => {
+                if (rmsValue < 0.25) {
+                    return "Lavender";
+                } else if (rmsValue >= 0.25 && rmsValue < 0.275) {
+                    return "Pink";
+                } else if (rmsValue >= 0.275 && rmsValue < 0.3) {
+                    return "Mint";
+                } else if (rmsValue >= 0.3 && rmsValue < 0.325) {
+                    return "Yellow";
+                } else if (rmsValue >= 0.325 && rmsValue < 0.35) {
+                    return "Orange";
+                } else if (rmsValue >= 0.35 && rmsValue < 0.375) {
+                    return "Green";
+                } else if (rmsValue >= 0.375 && rmsValue < 0.4) {
+                    return "Light Blue";
+                } else if (rmsValue >= 0.4 && rmsValue < 0.425) {
+                    return "Dark Blue";
+                } else if (rmsValue >= 0.425 && rmsValue < 0.45) {
+                    return "Teal";
+                } else if (rmsValue >= 0.45 && rmsValue < 0.475) {
+                    return "Purple";
+                } else if (rmsValue >= 0.475 && rmsValue < 0.5) {
+                    return "Red";
+                } else {
+                    return "Black";
                 }
+            }
+
+            function mapColorToHex(color) {
+                const colorMap = {
+                    "Lavender": 0xaa7cff,
+                    "Pink": 0xe032ff,
+                    "Mint": 0x32ff8c,
+                    "Yellow": 0xfff827,
+                    "Orange": 0xff9a27,
+                    "Green": 0x24eb39,
+                    "Light Blue": 0x24ebff,
+                    "Dark Blue": 0x2449ff,
+                    "Teal": 0x169265,
+                    "Purple": 0x8423ff,
+                    "Red": 0xff2020,
+                    "Black": 0x666666
+                };
+                return colorMap[color] || 0xFFFFFF;
             }
 
             async function loadAudio(audioElement, audioContext) {
                 const response = await fetch(audioElement.src);
                 const arrayBuffer = await response.arrayBuffer();
                 const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-                processAudioBuffer(audioBuffer);
+                const rmsValue = processAudioBuffer(audioBuffer);
+                return mapColorToHex(classifyGenre(rmsValue));
             }
-            loadAudio(this.audioElement, this.audioContext);
+            return await loadAudio(this.audioElement, this.audioContext);
         }
 
         executeByFrequencyBand(callback) {
@@ -466,7 +445,7 @@
                 }
                 item.moveFunction = moveFunction;
                 item.angularVelocity = (Math.PI / 512) * speed;
-                item.activate(shape);
+                item.activate(shape, this.audioSystem.gerneColor);
             }
         }
 
@@ -476,7 +455,6 @@
 
                 if (this.audioSystem.peak) {
                     this.bulletGeneratingTime = this.bulletGeneratingLimit;
-                    console.log("peak!!!");
                 }
                 if (this.bulletGeneratingTime > 0) {
                     const rms = this.audioSystem.rms;
